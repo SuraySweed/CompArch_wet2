@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include "cache.h"
 
 using std::FILE;
 using std::string;
@@ -62,6 +63,8 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	CacheSim cacheSim(MemCyc, BSize, L1Size, L2Size, L1Assoc, L2Assoc, L1Cyc, L2Cyc, WrAlloc);
+
 	while (getline(file, line)) {
 
 		stringstream ss(line);
@@ -84,14 +87,16 @@ int main(int argc, char **argv) {
 		unsigned long int num = 0;
 		num = strtoul(cutAddress.c_str(), NULL, 16);
 
+		cacheSim.operationHandle(operation, num);
+
 		// DEBUG - remove this line
 		cout << " (dec) " << num << endl;
 
 	}
 
-	double L1MissRate;
-	double L2MissRate;
-	double avgAccTime;
+	double L1MissRate = cacheSim.getL1MissRate();
+	double L2MissRate = cacheSim.getL2MissRate();
+	double avgAccTime = cacheSim.getAvgAccessTime();
 
 	printf("L1miss=%.03f ", L1MissRate);
 	printf("L2miss=%.03f ", L2MissRate);
