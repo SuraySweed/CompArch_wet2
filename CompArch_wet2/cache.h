@@ -159,7 +159,7 @@ inline unsigned int Cache::getLRUWay(unsigned int set)
 
 inline unsigned long int Cache::buildAddress(unsigned tag, unsigned set)
 {
-	unsigned long int address = tag;
+	unsigned address = tag;
 	address <<= set_bits;
 	address += set;
 	address <<= offset_bits;
@@ -169,7 +169,7 @@ inline unsigned long int Cache::buildAddress(unsigned tag, unsigned set)
 
 inline void Cache::removeLRU(unsigned tag, unsigned set)
 {
-	unsigned long int target_address = buildAddress(tag, set);
+	unsigned target_address = buildAddress(tag, set);
 	unsigned address_set = getAddressSet(target_address);
 	unsigned address_tag = getAddressTag(target_address);
 
@@ -209,7 +209,7 @@ private:
 	Cache* L1;
 	Cache* L2;
 
-	void writeAllocate(unsigned long int address);
+	void writeAllocate(unsigned long int address, int isDirtyChange);
 	void L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange); // 0 dont change dirty, 1 change
 
 public:
@@ -225,7 +225,7 @@ public:
 	double getAvgAccessTime() { return (cacheSim_access_number ? double(memory_cycle) / double(cacheSim_access_number) : 0); }
 };
 
-inline void CacheSim::writeAllocate(unsigned long int address)
+inline void CacheSim::writeAllocate(unsigned long int address, int isDirtyChange)
 {
 	unsigned address_set_L2 = L2->getAddressSet(address);
 	unsigned address_tag_L2 = L2->getAddressTag(address);
@@ -234,7 +234,7 @@ inline void CacheSim::writeAllocate(unsigned long int address)
 	if (L2->isValidEntry(LRU_way, address_set_L2)) {
 		L1->removeLRU(address_tag_L2, address_set_L2);
 	}
-	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, false, 1);
+	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, false, isDirtyChange);
 }
 
 inline void CacheSim::L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange)
@@ -279,7 +279,7 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 
 				// update
 				if (is_write_allocate) {
-					writeAllocate(address);
+					writeAllocate(address, 0);
 				}
 				// if write no allocate, we do nothing
 			}
@@ -304,7 +304,7 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 			if (!L2->read(address)) { // L2 MISS
 				L2->incMissNumber();
 				memory_cycle += memCyc;
-				writeAllocate(address);
+				writeAllocate(address, 0);
 			}
 			L2Hit(address, false, 0);
 		}
