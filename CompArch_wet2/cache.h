@@ -43,7 +43,7 @@ private:
 	unsigned offset_bits;
 	unsigned cache_access_number;
 	unsigned miss_number;
-	int ways_number;
+	unsigned ways_number;
 	vector<vector<CacheEntry>> ways;
 
 
@@ -73,7 +73,7 @@ public:
 	bool getDirty(unsigned way, unsigned set) { return ways[way][set].isDirty(); }
 	bool isValidEntry(unsigned way, unsigned set);
 
-	void writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty);
+	void writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty, int isDirtyChange);
 
 	double getMissRate() { return (cache_access_number ? double(miss_number) / double(cache_access_number) : 0); }
 };
@@ -92,19 +92,19 @@ Cache::Cache(unsigned cahceSize, unsigned blockSize, unsigned assocLevel, unsign
 
 inline unsigned Cache::getAddressSet(unsigned long int address)
 {
-	return ((address >> offset_bits) & (int)pow(2, set_bits) - 1);
+	return ((address >> offset_bits) & ((unsigned)pow(2, set_bits) - 1));
 }
 
 inline unsigned Cache::getAddressTag(unsigned long int address)
 {
-	return (address >> (offset_bits + set_bits) & (int)pow(2, tag_bits) - 1);
+	return ((address >> (offset_bits + set_bits)) & ((unsigned)pow(2, tag_bits) - 1));
 }
 
 inline void Cache::LRUUpdate(unsigned way, unsigned set)
 {
 	unsigned int x = ways[way][set].getCounter();
 	ways[way][set].setCounter(ways_number - 1);
-	for (int j = 0; j < ways_number; j++) {
+	for (unsigned j = 0; j < ways_number; j++) {
 		if ((j != way) && (ways[j][set].getCounter() > x)) {
 			ways[j][set].decCounter();
 		}
@@ -117,7 +117,7 @@ inline bool Cache::read(unsigned long int address)
 	unsigned address_tag = getAddressTag(address);
 
 	// search for the valid block address in the ways vector
-	for (int way = 0; way < ways_number; way++) {
+	for (unsigned way = 0; way < ways_number; way++) {
 		// HIT
 		if (ways[way][address_set].getTag() == address_tag && ways[way][address_set].isValid()) { 
 			LRUUpdate(way, address_set);
@@ -133,7 +133,7 @@ inline bool Cache::write(unsigned long int address)
 	unsigned address_tag = getAddressTag(address);
 
 	// HIT
-	for (int way = 0; way < ways_number; way++) {
+	for (unsigned way = 0; way < ways_number; way++) {
 		if (ways[way][address_set].getTag() == address_tag && ways[way][address_set].isValid()) {
 			LRUUpdate(way, address_set);
 			ways[way][address_set].setDirtyBit(true);
@@ -147,7 +147,7 @@ inline unsigned int Cache::getLRUWay(unsigned int set)
 {
 	unsigned int min_counter = ways[0][set].getCounter();
 	unsigned int min_way = 0;
-	for (int i = 0; i < ways_number; i++) {
+	for (unsigned i = 0; i < ways_number; i++) {
 		if (min_counter > ways[i][set].getCounter()) {
 			min_counter = ways[i][set].getCounter();
 			min_way = i;
@@ -174,7 +174,7 @@ inline void Cache::removeLRU(unsigned tag, unsigned set)
 	unsigned address_tag = getAddressTag(target_address);
 
 	int way = -1;
-	for (int i = 0; i < ways_number; i++) {
+	for (unsigned i = 0; i < ways_number; i++) {
 		if (ways[i][address_set].getTag() == address_tag) {
 			way = i;
 		}
@@ -189,9 +189,11 @@ inline bool Cache::isValidEntry(unsigned way, unsigned set)
 	return (ways[way][set].isValid());
 }
 
-inline void Cache::writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty)
+inline void Cache::writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty, int isDirtyChange)
 {
-	ways[way][set].setDirtyBit(modify_dirty);
+	if (isDirtyChange) {
+		ways[way][set].setDirtyBit(modify_dirty);
+	}
 	ways[way][set].setValid(true);
 	ways[way][set].setTag(tag);
 	LRUUpdate(way, set);
@@ -208,7 +210,7 @@ private:
 	Cache* L2;
 
 	void writeAllocate(unsigned long int address);
-	void L2Hit(unsigned long int address, bool modify_dirty);
+	void L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange); // 0 dont change dirty, 1 change
 
 public:
 	CacheSim(unsigned MemCyc, unsigned BSize, unsigned L1Size, unsigned L2Size, unsigned L1Assoc,
@@ -232,17 +234,17 @@ inline void CacheSim::writeAllocate(unsigned long int address)
 	if (L2->isValidEntry(LRU_way, address_set_L2)) {
 		L1->removeLRU(address_tag_L2, address_set_L2);
 	}
-	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, false);
+	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, false, 1);
 }
 
-inline void CacheSim::L2Hit(unsigned long int address, bool modify_dirty)
+inline void CacheSim::L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange)
 {
 	unsigned address_set_L1 = L1->getAddressSet(address);
 	unsigned address_tag_L1 = L1->getAddressTag(address);
 	unsigned LRU_way1 = L1->getLRUWay(address_set_L1);
 	bool dirty = L1->getDirty(LRU_way1, address_set_L1);
 
-	L1->writeBack(LRU_way1, address_set_L1, address_tag_L1, modify_dirty);
+	L1->writeBack(LRU_way1, address_set_L1, address_tag_L1, modify_dirty, isDirtyChange);
 	if (dirty) {
 		L2->write(L2->buildAddress(address_tag_L1, address_set_L1));
 	}
@@ -284,7 +286,7 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 
 			// HIT IN L2
 			if (is_write_allocate) {
-				L2Hit(address, true);
+				L2Hit(address, true, 1);
 			}
 		}
 	}
@@ -304,7 +306,7 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 				memory_cycle += memCyc;
 				writeAllocate(address);
 			}
-			L2Hit(address, false);
+			L2Hit(address, false, 0);
 		}
 	}
 }
