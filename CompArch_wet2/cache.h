@@ -60,8 +60,8 @@ public:
 	bool read(unsigned long int address);
 	bool write(unsigned long int address);
 	unsigned int getLRUWay(unsigned int set);
-	unsigned long int buildAddress(unsigned tag, unsigned set);
-	void removeLRU(unsigned tag, unsigned set);
+	unsigned buildAddress(unsigned tag, unsigned set);
+	int removeLRU(unsigned tag, unsigned set);
 
 	void incCacheAccess() { cache_access_number++; }
 	void incMissNumber() { miss_number++; }
@@ -69,19 +69,20 @@ public:
 	unsigned getCycleCahceNumber() { return cache_cycles_number; }
 	unsigned getCahceAccessNumber() { return cache_access_number; }
 	unsigned getMissNumber() { return miss_number; }
-	//unsigned getTag(unsigned way, unsigned set) { return ways[way][set].getTag(); }
+	unsigned getTag(unsigned way, unsigned set) { return ways[way][set].getTag(); }
 	bool getDirty(unsigned way, unsigned set) { return ways[way][set].isDirty(); }
 	bool isValidEntry(unsigned way, unsigned set);
+	int getEmptyLocation(unsigned set);
 
-	void writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty, int isDirtyChange);
+	void writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty);
 
 	double getMissRate() { return (cache_access_number ? double(miss_number) / double(cache_access_number) : 0); }
 };
 
 
 Cache::Cache(unsigned cahceSize, unsigned blockSize, unsigned assocLevel, unsigned cyclesNum) : cache_size(cahceSize),
-	block_size(blockSize), associative_level(assocLevel), cache_cycles_number(cyclesNum), cache_access_number(0), 
-	miss_number(0), ways_number(pow(2, assocLevel))
+block_size(blockSize), associative_level(assocLevel), cache_cycles_number(cyclesNum), cache_access_number(0),
+miss_number(0), ways_number(pow(2, assocLevel))
 {
 	offset_bits = blockSize;
 	set_bits = cahceSize - assocLevel - blockSize;
@@ -92,12 +93,12 @@ Cache::Cache(unsigned cahceSize, unsigned blockSize, unsigned assocLevel, unsign
 
 inline unsigned Cache::getAddressSet(unsigned long int address)
 {
-	return ((address >> offset_bits) & ((unsigned)pow(2, set_bits) - 1));
+	return ((address >> offset_bits)& ((unsigned)pow(2, set_bits) - 1));
 }
 
 inline unsigned Cache::getAddressTag(unsigned long int address)
 {
-	return ((address >> (offset_bits + set_bits)) & ((unsigned)pow(2, tag_bits) - 1));
+	return ((address >> (offset_bits + set_bits))& ((unsigned)pow(2, tag_bits) - 1));
 }
 
 inline void Cache::LRUUpdate(unsigned way, unsigned set)
@@ -119,7 +120,7 @@ inline bool Cache::read(unsigned long int address)
 	// search for the valid block address in the ways vector
 	for (unsigned way = 0; way < ways_number; way++) {
 		// HIT
-		if (ways[way][address_set].getTag() == address_tag && ways[way][address_set].isValid()) { 
+		if (ways[way][address_set].getTag() == address_tag && ways[way][address_set].isValid()) {
 			LRUUpdate(way, address_set);
 			return true;
 		}
@@ -157,7 +158,7 @@ inline unsigned int Cache::getLRUWay(unsigned int set)
 	return min_way;
 }
 
-inline unsigned long int Cache::buildAddress(unsigned tag, unsigned set)
+inline unsigned Cache::buildAddress(unsigned tag, unsigned set)
 {
 	unsigned address = tag;
 	address <<= set_bits;
@@ -167,7 +168,7 @@ inline unsigned long int Cache::buildAddress(unsigned tag, unsigned set)
 	return address;
 }
 
-inline void Cache::removeLRU(unsigned tag, unsigned set)
+inline int Cache::removeLRU(unsigned tag, unsigned set)
 {
 	unsigned target_address = buildAddress(tag, set);
 	unsigned address_set = getAddressSet(target_address);
@@ -175,13 +176,16 @@ inline void Cache::removeLRU(unsigned tag, unsigned set)
 
 	int way = -1;
 	for (unsigned i = 0; i < ways_number; i++) {
-		if (ways[i][address_set].getTag() == address_tag) {
+		if (ways[i][address_set].getTag() == address_tag && ways[i][address_set].isValid()) {
 			way = i;
 		}
 	}
 
-	if (way == -1) return;
+	if (way == -1) return -1;
 	ways[way][address_set].setValid(false);
+	bool ret = (ways[way][address_set].isDirty() ? 1 : 0);
+	ways[way][address_set].setDirtyBit(false);
+	return ret;
 }
 
 inline bool Cache::isValidEntry(unsigned way, unsigned set)
@@ -189,11 +193,19 @@ inline bool Cache::isValidEntry(unsigned way, unsigned set)
 	return (ways[way][set].isValid());
 }
 
-inline void Cache::writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty, int isDirtyChange)
+inline int Cache::getEmptyLocation(unsigned set)
 {
-	if (isDirtyChange) {
-		ways[way][set].setDirtyBit(modify_dirty);
+	for (int way = 0; way < ways_number; way++) {
+		if (!ways[way][set].isValid()) {
+			return way;
+		}
 	}
+	return -1;
+}
+
+inline void Cache::writeBack(unsigned way, unsigned set, unsigned tag, bool modify_dirty)
+{
+	ways[way][set].setDirtyBit(modify_dirty);
 	ways[way][set].setValid(true);
 	ways[way][set].setTag(tag);
 	LRUUpdate(way, set);
@@ -209,8 +221,8 @@ private:
 	Cache* L1;
 	Cache* L2;
 
-	void writeAllocate(unsigned long int address, int isDirtyChange);
-	void L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange); // 0 dont change dirty, 1 change
+	void writeAllocate(unsigned long int address);
+	void L1WriteBack(unsigned long int address, bool modify_dirty); // 0 dont change dirty, 1 change
 
 public:
 	CacheSim(unsigned MemCyc, unsigned BSize, unsigned L1Size, unsigned L2Size, unsigned L1Assoc,
@@ -225,28 +237,44 @@ public:
 	double getAvgAccessTime() { return (cacheSim_access_number ? double(memory_cycle) / double(cacheSim_access_number) : 0); }
 };
 
-inline void CacheSim::writeAllocate(unsigned long int address, int isDirtyChange)
+inline void CacheSim::writeAllocate(unsigned long int address)
 {
 	unsigned address_set_L2 = L2->getAddressSet(address);
 	unsigned address_tag_L2 = L2->getAddressTag(address);
+	
+	//search for empty location in L2 or get LRU
+	int LRU_way = L2->getEmptyLocation(address_set_L2);
+	bool modify_dirty = false;
 
-	unsigned LRU_way = L2->getLRUWay(address_set_L2);
-	if (L2->isValidEntry(LRU_way, address_set_L2)) {
-		L1->removeLRU(address_tag_L2, address_set_L2);
+	if (LRU_way == -1) {
+		LRU_way = L2->getLRUWay(address_set_L2);
+		if (L2->isValidEntry(LRU_way, address_set_L2)) {
+			unsigned removedTag = L2->getTag(LRU_way, address_set_L2);
+			int result = L1->removeLRU(removedTag, address_set_L2);
+			if (result == 1) {
+				modify_dirty = true;
+			}
+		}
 	}
-	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, false, isDirtyChange);
+	L2->writeBack(LRU_way, address_set_L2, address_tag_L2, modify_dirty);
 }
 
-inline void CacheSim::L2Hit(unsigned long int address, bool modify_dirty, int isDirtyChange)
+inline void CacheSim::L1WriteBack(unsigned long int address, bool modify_dirty)
 {
 	unsigned address_set_L1 = L1->getAddressSet(address);
 	unsigned address_tag_L1 = L1->getAddressTag(address);
-	unsigned LRU_way1 = L1->getLRUWay(address_set_L1);
-	bool dirty = L1->getDirty(LRU_way1, address_set_L1);
+	
+	//serach for empty location
+	int LRU_way = L1->getEmptyLocation(address_set_L1);
+	if (LRU_way == -1) {
+		LRU_way = L1->getLRUWay(address_set_L1);
+	}
+	bool dirty = L1->getDirty(LRU_way, address_set_L1);
+	unsigned address_remove_L2 = L2->buildAddress(L1->getTag(LRU_way, address_set_L1), address_set_L1);
 
-	L1->writeBack(LRU_way1, address_set_L1, address_tag_L1, modify_dirty, isDirtyChange);
+	L1->writeBack(LRU_way, address_set_L1, address_tag_L1, modify_dirty);
 	if (dirty) {
-		L2->write(L2->buildAddress(address_tag_L1, address_set_L1));
+		L2->write(address_remove_L2);
 	}
 }
 
@@ -279,14 +307,13 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 
 				// update
 				if (is_write_allocate) {
-					writeAllocate(address, 0);
+					writeAllocate(address);
 				}
 				// if write no allocate, we do nothing
 			}
 
-			// HIT IN L2
 			if (is_write_allocate) {
-				L2Hit(address, true, 1);
+				L1WriteBack(address, true);
 			}
 		}
 	}
@@ -304,9 +331,9 @@ inline void CacheSim::operationHandle(char operation_type, unsigned long int add
 			if (!L2->read(address)) { // L2 MISS
 				L2->incMissNumber();
 				memory_cycle += memCyc;
-				writeAllocate(address, 0);
+				writeAllocate(address);
 			}
-			L2Hit(address, false, 0);
+			L1WriteBack(address, false);
 		}
 	}
 }
